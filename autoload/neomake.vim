@@ -273,6 +273,10 @@ function! s:MakeJob(make_id, options) abort
     return r
 endfunction
 
+function! s:get_tempname(filename) abort
+    return tempname() . (has('win32') ? '\' : '/') . a:filename
+endfunction
+
 let s:maker_base = {}
 function! s:maker_base._get_argv(...) abort dict
     let bufnr = a:0 ? a:1 : 0
@@ -300,11 +304,28 @@ function! s:maker_base._get_argv(...) abort dict
     if bufnr && neomake#utils#GetSetting('append_file', self, 1, [self.ft], bufnr)
         let bufname = bufname(bufnr)
         if !len(bufname)
-            throw 'Neomake: no file name'
+            let temp_file = s:get_tempname('neomake_tmp_' . self.ft)
+            call neomake#utils#DebugMessage(printf(
+                        \ 'Using tempfile for unnamed buffer %s: %s', bufnr, temp_file))
+        elseif &modified
+            let temp_file = s:get_tempname(fnamemodify(bufname, ':t'))
+            call neomake#utils#DebugMessage(printf(
+                        \ 'Using tempfile for modified buffer %s: %s', bufnr, temp_file))
+        elseif !filereadable(bufname)
+            let temp_file = s:get_tempname(fnamemodify(bufname, ':t'))
+            call neomake#utils#DebugMessage(printf(
+                        \ 'Using tempfile for unreadable buffer %s: %s', bufnr, temp_file))
+        else
+            let bufname = fnamemodify(bufname, ':p')
         endif
-        let bufname = fnamemodify(bufname, ':p')
-        if !filereadable(bufname)
-            throw 'Neomake: file is not readable ('.bufname.')'
+
+        if exists('temp_file')
+            let temp_dir = fnamemodify(temp_file, ':h')
+            call mkdir(temp_dir, '', 0750)
+            call writefile(getbufline(bufnr, 1, '$'), temp_file)
+
+            let self.temp_file = temp_file
+            let bufname = temp_file
         endif
         if args_is_list
             call add(args, bufname)
@@ -702,6 +723,9 @@ function! s:AddExprCallback(jobinfo, prev_index) abort
         let index += 1
 
         let before = copy(entry)
+        if has_key(maker, 'temp_file') && file_mode
+            let entry.bufnr = a:jobinfo.bufnr
+        endif
         for s:f in s:postprocessors
             if type(s:f) == type({})
                 let s:this = extend(copy(s:f), {'maker': maker})
@@ -808,6 +832,17 @@ function! s:CleanJobinfo(jobinfo) abort
         endif
         if has_key(s:project_job_output, a:jobinfo.id)
             unlet s:project_job_output[a:jobinfo.id]
+        endif
+    endif
+
+    if has_key(a:jobinfo.maker, 'temp_file')
+        call neomake#utils#DebugMessage(printf('Removing temporary file: %s',
+                    \ a:jobinfo.maker.temp_file))
+        call delete(a:jobinfo.maker.temp_file)
+        " XXX: old Vim has no support for flags.. the patch version is not
+        " exact here!
+        if v:version >= 705 || (v:version == 704 && has('patch1689'))
+            call delete(fnamemodify(a:jobinfo.maker.temp_file, ':h'), 'd')
         endif
     endif
 
