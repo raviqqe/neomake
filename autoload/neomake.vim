@@ -147,19 +147,6 @@ function! s:MakeJob(make_id, options) abort
         \ 'next': get(a:options, 'next', {}),
         \ }
 
-    " Call .fn function in maker object, if any.
-    if has_key(maker, 'fn')
-        " TODO: Allow to throw and/or return 0 to abort/skip?!
-        let returned_maker = call(maker.fn, [jobinfo], maker)
-        if returned_maker isnot# 0
-            " This conditional assignment allows to both return a copy
-            " (factory), while also can be used as a init method.  The maker
-            " is deepcopied usually here already though anyway (via
-            " s:map_makers).
-            let maker = returned_maker
-        endif
-    endif
-    lockvar maker
     let jobinfo.maker = maker
 
     " Check for already running job for the same maker (from other runs).
@@ -224,7 +211,8 @@ function! s:MakeJob(make_id, options) abort
 
     try
         let error = ''
-        let argv = maker._get_argv(jobinfo.file_mode ? jobinfo.bufnr : 0)
+        let argv = maker._get_argv(jobinfo)
+        lockvar maker
         if neomake#has_async_support()
             if has('nvim')
                 let opts = {
@@ -309,17 +297,78 @@ function! s:MakeJob(make_id, options) abort
 endfunction
 
 let s:maker_base = {}
-function! s:maker_base._get_argv(...) abort dict
-    let bufnr = a:0 ? a:1 : 0
-
-    " Resolve exe/args, which might be a function or dictionary.
-    if type(self.exe) == type(function('tr'))
-        let exe = call(self.exe, [])
-    elseif type(self.exe) == type({})
-        let exe = call(self.exe.fn, [], self.exe)
-    else
-        let exe = self.exe
+function! s:maker_base._get_tempfilename() abort dict
+    let bufnr = bufnr('%')
+    let fts = has_key(self, 'ft') ? [self.ft] : []
+    let tempfile_enabled = neomake#utils#GetSetting('tempfile_enabled', self, 1, fts, bufnr)
+    if !tempfile_enabled
+        return ''
     endif
+
+    if has_key(self, 'tempfile_name')
+        return self.tempfile_name
+    endif
+
+    let bufname = bufname(bufnr)
+    if len(bufname)
+        let bufname = fnamemodify(bufname, ':t')
+    else
+        let bufname = 'neomake_tmp.' . join(fts, '.')
+    endif
+
+    return tempname() . (has('win32') ? '\' : '/') . bufname
+endfunction
+
+" Check if a temporary file is required, and set self.temp_file in case it is.
+function! s:maker_base._get_fname_for_buffer() abort
+    let bufnr = bufnr('%')
+    let bufname = bufname(bufnr)
+    if !len(bufname)
+        let temp_file = self._get_tempfilename()
+        if !empty(temp_file)
+            call neomake#utils#DebugMessage(printf(
+                        \ 'Using tempfile for unnamed buffer %s: %s', bufnr, temp_file))
+        else
+            throw 'Neomake: no file name'
+        endif
+
+    elseif &modified
+        let temp_file = self._get_tempfilename()
+        if !empty(temp_file)
+            call neomake#utils#DebugMessage(printf(
+                        \ 'Using tempfile for modified buffer %s: %s', bufnr, temp_file))
+        else
+            call neomake#utils#DebugMessage(printf(
+                        \ 'warning: buffer is modified: %s', bufnr))
+        endif
+
+    elseif !filereadable(bufname)
+        let temp_file = self._get_tempfilename()
+        if !empty(temp_file)
+            call neomake#utils#DebugMessage(printf(
+                        \ 'Using tempfile for unreadable buffer %s: %s', bufnr, temp_file))
+        else
+            throw 'Neomake: file is not readable ('.fnamemodify(bufname, ':p').')'
+        endif
+    else
+        let bufname = fnamemodify(bufname, ':p')
+    endif
+
+    if exists('temp_file')
+        let temp_dir = fnamemodify(temp_file, ':h')
+        if !isdirectory(temp_dir)
+            call mkdir(temp_dir, 'p', 0750)
+        endif
+        call writefile(getbufline(bufnr, 1, '$'), temp_file)
+
+        let bufname = temp_file
+        let self.temp_file = temp_file
+    endif
+    return bufname
+endfunction
+
+function! s:maker_base._bind_args(bufnr) abort dict
+    " Resolve args, which might be a function or dictionary.
     if type(self.args) == type(function('tr'))
         let args = call(self.args, [])
     elseif type(self.args) == type({})
@@ -328,23 +377,32 @@ function! s:maker_base._get_argv(...) abort dict
         let args = copy(self.args)
     endif
     let args_is_list = type(args) == type([])
-
     if args_is_list
         call neomake#utils#ExpandArgs(args)
     endif
-    if bufnr && neomake#utils#GetSetting('append_file', self, 1, [self.ft], bufnr)
-        let bufname = bufname(bufnr)
-        if !len(bufname)
-            throw 'Neomake: no file name'
-        endif
-        let bufname = fnamemodify(bufname, ':p')
-        if !filereadable(bufname)
-            throw 'Neomake: file is not readable ('.bufname.')'
-        endif
+    let self.args = args
+endfunction
+
+function! s:maker_base._get_argv(jobinfo) abort dict
+    " Resolve exe, which might be a function or dictionary.
+    if type(self.exe) == type(function('tr'))
+        let exe = call(self.exe, [])
+    elseif type(self.exe) == type({})
+        let exe = call(self.exe.fn, [], self.exe)
+    else
+        let exe = self.exe
+    endif
+
+    let args = self.args
+    let args_is_list = type(args) == type([])
+
+    let fts = has_key(self, 'ft') ? [self.ft] : []
+    if a:jobinfo.bufnr && neomake#utils#GetSetting('append_file', self, 1, fts, a:jobinfo.bufnr)
+        let filename = self._get_fname_for_buffer()
         if args_is_list
-            call add(args, bufname)
+            call add(args, filename)
         else
-            let args .= ' '.fnameescape(bufname)
+            let args .= ' '.fnameescape(filename)
         endif
     endif
 
@@ -428,7 +486,7 @@ function! neomake#GetMaker(name_or_maker, ...) abort
     endif
 
     " Create the maker object.
-    let maker = deepcopy(maker)
+    let maker = extend(deepcopy(s:maker_base), deepcopy(maker))
     if !has_key(maker, 'name')
         if type(a:name_or_maker) == type('')
             let maker.name = a:name_or_maker
@@ -436,7 +494,6 @@ function! neomake#GetMaker(name_or_maker, ...) abort
             let maker.name = 'unnamed_maker'
         endif
     endif
-    let maker._get_argv = s:maker_base._get_argv
     let defaults = copy(s:maker_defaults)
     call extend(defaults, {
         \ 'exe': maker.name,
@@ -619,16 +676,20 @@ function! s:Make(options) abort
         endif
 
         call s:AddMakeInfoForCurrentWin(s:make_id)
-    endif
 
-    let args = [options.enabled_makers]
-    if file_mode
-        let args += [&filetype]
-    endif
-    let enabled_makers = call('s:map_makers', args)
-    if !len(enabled_makers)
-        call neomake#utils#DebugMessage('Nothing to make: no enabled makers.')
-        return []
+        " Instantiate all makers in the beginning (so expand() gets used in
+        " the current buffer's context).
+        let args = [options]
+        if file_mode
+            let args += [&filetype]
+        endif
+        let enabled_makers = call('s:map_makers', args)
+        if !len(enabled_makers)
+            call neomake#utils#DebugMessage('Nothing to make: no enabled makers.')
+            return []
+        endif
+    else
+        let enabled_makers = get(options, 'enabled_makers', [])
     endif
 
     let maker_info = join(map(copy(enabled_makers),
@@ -643,6 +704,8 @@ function! s:Make(options) abort
             continue
         endif
         if has_key(a:options, 'exit_callback')
+            " FIXME: remove/refactor exit_callback with NeomakeFinished.
+            "        (https://github.com/neomake/neomake/issues/1074)
             let maker.exit_callback = a:options.exit_callback
         endif
         " call neomake#utils#DebugMessage('Maker: '.string(enabled_makers), {'make_id': s:make_id})
@@ -719,6 +782,9 @@ function! s:AddExprCallback(jobinfo, prev_index) abort
         let index += 1
 
         let before = copy(entry)
+        if has_key(a:jobinfo.maker, 'temp_file') && file_mode
+            let entry.bufnr = a:jobinfo.bufnr
+        endif
         for s:f in s:postprocessors
             if type(s:f) == type({})
                 let s:this = extend(copy(s:f), {'maker': maker})
@@ -825,6 +891,18 @@ function! s:CleanJobinfo(jobinfo) abort
         endif
         if has_key(s:project_job_output, a:jobinfo.id)
             unlet s:project_job_output[a:jobinfo.id]
+        endif
+    endif
+
+    if has_key(a:jobinfo.maker, 'temp_file')
+        let temp_file = a:jobinfo.maker.temp_file
+        call neomake#utils#DebugMessage(printf('Removing temporary file: %s',
+                    \ temp_file))
+        call delete(temp_file)
+        " XXX: old Vim has no support for flags.. the patch version is not
+        " exact here!
+        if v:version >= 705 || (v:version == 704 && has('patch1689'))
+            call delete(fnamemodify(temp_file, ':h'), 'd')
         endif
     endif
 
@@ -1404,17 +1482,33 @@ function! neomake#CompleteJobs(...) abort
     return join(map(neomake#GetJobs(), "v:val.id.': '.v:val.maker.name"), "\n")
 endfunction
 
-function! s:map_makers(makers, ...) abort
+function! s:map_makers(jobinfo, ...) abort
     let r = []
-    for maker in a:makers
+    let file_mode = a:0
+    for maker_or_name in a:jobinfo.enabled_makers
         try
-            let m = call('neomake#GetMaker', [maker] + a:000)
+            let maker = call('neomake#GetMaker', [maker_or_name] + a:000)
+            call maker._bind_args(file_mode ? bufnr('%') : 0)
+
+            " Call .fn function in maker object, if any.
+            if has_key(maker, 'fn')
+                " TODO: Allow to throw and/or return 0 to abort/skip?!
+                let returned_maker = call(maker.fn, [a:jobinfo], maker)
+                if returned_maker isnot# 0
+                    " This conditional assignment allows to both return a copy
+                    " (factory), while also can be used as a init method.  The maker
+                    " is deepcopied usually here already though anyway (via
+                    " s:map_makers).
+                    let maker = returned_maker
+                endif
+            endif
+
         catch /^Neomake: /
             let error = substitute(v:exception, '^Neomake: ', '', '')
-            call neomake#utils#ErrorMessage(error)
+            call neomake#utils#ErrorMessage(error, {'make_id': s:make_id})
             continue
         endtry
-        let r += [m]
+        let r += [maker]
     endfor
     return r
 endfunction
