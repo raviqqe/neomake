@@ -3,6 +3,7 @@
 " include/setup.vader).
 
 ~ Features
+Include (Autolinting): autolint.vader
 Include (Completion): completion.vader
 Include (Hooks): hooks.vader
 Include (Integration tests): integration.vader
