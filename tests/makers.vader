@@ -103,7 +103,7 @@ Execute (neomake#GetEnabledMakers without filetype):
 
   AssertEqual len(g:neomake_test_messages), 0
 
-Execute (Makers: get_entries_for_output):
+Execute (Makers: process_output):
   Save g:neomake_test_entries
   let g:neomake_test_entries = [{
     \ 'bufnr': bufnr('%'),
@@ -126,7 +126,7 @@ Execute (Makers: get_entries_for_output):
   \ 'exe': 'printf',
   \ 'args': ['foo'],
   \ 'append_file': 0,
-  \ 'get_entries_for_output': function('Neomake_test_maker_get_entries')}
+  \ 'process_output': function('Neomake_test_maker_get_entries')}
 
   call neomake#Make(1, [maker])
   NeomakeTestsWaitForFinishedJobs
