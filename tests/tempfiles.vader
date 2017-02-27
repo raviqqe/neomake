@@ -14,7 +14,7 @@ Execute (Neomake uses temporary file for unsaved buffer):
   if neomake#has_async_support()
     let jobinfo = neomake#GetJobs()[0]
 
-    let temp_file = jobinfo.maker.temp_file
+    let temp_file = jobinfo.temp_file
     AssertEqual fnamemodify(temp_file, ':h:h'), fnamemodify(tempname(), ':h')
     AssertEqual getfperm(temp_file), 'rw-r--r--'
     NeomakeTestsWaitForFinishedJobs
