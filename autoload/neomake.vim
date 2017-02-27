@@ -273,13 +273,9 @@ function! s:MakeJob(make_id, options) abort
     return r
 endfunction
 
-function! s:get_tempname(filename) abort
-    return tempname() . (has('win32') ? '\' : '/') . a:filename
-endfunction
-
 let s:maker_base = {}
-function! s:maker_base._get_argv(...) abort dict
-    let bufnr = a:0 ? a:1 : 0
+function! s:maker_base._get_argv(jobinfo) abort dict
+    let bufnr = a:jobinfo.file_mode ? a:jobinfo.bufnr : 0
 
     " Resolve exe/args, which might be a function or dictionary.
     if type(self.exe) == type(function('tr'))
@@ -301,36 +297,13 @@ function! s:maker_base._get_argv(...) abort dict
     if args_is_list
         call neomake#utils#ExpandArgs(args)
     endif
+
     if bufnr && neomake#utils#GetSetting('append_file', self, 1, [self.ft], bufnr)
-        let bufname = bufname(bufnr)
-        if !len(bufname)
-            let temp_file = s:get_tempname('neomake_tmp_' . self.ft)
-            call neomake#utils#DebugMessage(printf(
-                        \ 'Using tempfile for unnamed buffer %s: %s', bufnr, temp_file))
-        elseif &modified
-            let temp_file = s:get_tempname(fnamemodify(bufname, ':t'))
-            call neomake#utils#DebugMessage(printf(
-                        \ 'Using tempfile for modified buffer %s: %s', bufnr, temp_file))
-        elseif !filereadable(bufname)
-            let temp_file = s:get_tempname(fnamemodify(bufname, ':t'))
-            call neomake#utils#DebugMessage(printf(
-                        \ 'Using tempfile for unreadable buffer %s: %s', bufnr, temp_file))
-        else
-            let bufname = fnamemodify(bufname, ':p')
-        endif
-
-        if exists('temp_file')
-            let temp_dir = fnamemodify(temp_file, ':h')
-            call mkdir(temp_dir, '', 0750)
-            call writefile(getbufline(bufnr, 1, '$'), temp_file)
-
-            let self.temp_file = temp_file
-            let bufname = temp_file
-        endif
+        let filename = neomake#utils#get_fname_for_buffer(a:jobinfo)
         if args_is_list
-            call add(args, bufname)
+            call add(args, filename)
         else
-            let args .= ' '.fnameescape(bufname)
+            let args .= ' '.fnameescape(filename)
         endif
     endif
 

@@ -172,7 +172,8 @@ function! s:command_maker.fn(jobinfo) dict abort
     let command = self.__command
 
     if a:jobinfo.file_mode && get(maker, 'append_file', 1)
-        let command .= ' '.fnameescape(fnamemodify(bufname(a:jobinfo.bufnr), ':p'))
+        let fname = neomake#utils#get_fname_for_buffer(a:jobinfo)
+        let command .= ' '.fnameescape(fnamemodify(fname, ':p'))
         let maker.append_file = 0
     endif
     call extend(maker, {
@@ -414,4 +415,41 @@ endfunction
 
 function! neomake#utils#JSONdecode(json) abort
     return neomake#compat#json_decode(a:json)
+endfunction
+
+function! s:get_tempname(filename) abort
+    return tempname() . (has('win32') ? '\' : '/') . a:filename
+endfunction
+
+" Create a temporary file for the given jobinfo, and set jobinfo.temp_file in
+" case one is created.
+function! neomake#utils#get_fname_for_buffer(jobinfo) abort
+    let bufnr = a:jobinfo.bufnr
+    let bufname = bufname(bufnr)
+    if !len(bufname)
+        let ft = a:jobinfo.ft
+        let temp_file = s:get_tempname('neomake_tmp_' . ft)
+        call neomake#utils#DebugMessage(printf(
+                    \ 'Using tempfile for unnamed buffer %s: %s', bufnr, temp_file))
+    elseif &modified
+        let temp_file = s:get_tempname(fnamemodify(bufname, ':t'))
+        call neomake#utils#DebugMessage(printf(
+                    \ 'Using tempfile for modified buffer %s: %s', bufnr, temp_file))
+    elseif !filereadable(bufname)
+        let temp_file = s:get_tempname(fnamemodify(bufname, ':t'))
+        call neomake#utils#DebugMessage(printf(
+                    \ 'Using tempfile for unreadable buffer %s: %s', bufnr, temp_file))
+    else
+        let bufname = fnamemodify(bufname, ':p')
+    endif
+
+    if exists('temp_file')
+        let temp_dir = fnamemodify(temp_file, ':h')
+        call mkdir(temp_dir, '', 0750)
+        call writefile(getbufline(bufnr, 1, '$'), temp_file)
+
+        let bufname = temp_file
+        let a:jobinfo.temp_file = temp_file
+    endif
+    return bufname
 endfunction

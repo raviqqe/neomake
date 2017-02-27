@@ -277,3 +277,23 @@ Execute (neomake#utils#MakerFromCommand appends args for file_mode):
   AssertEqual maker.fn(jobinfo), {
   \ 'args': [&shellcmdflag, 'foo '.fnameescape(fname)], 'append_file': 0,
   \ 'exe': &shell, 'remove_invalid_entries': 0}
+
+Execute (neomake#utils#MakerFromCommand uses tempfile):
+  let maker = neomake#utils#MakerFromCommand('true')
+
+  new
+  let jobinfo = {'file_mode': 1, 'bufnr': bufnr('%')}
+  file dir/\ with\ spaces
+
+  set buftype=nofile
+  let bound_maker = maker.fn(jobinfo)
+  let temp_file = jobinfo.temp_file
+  AssertEqual bound_maker, {
+  \ 'args': [&shellcmdflag, 'true '.fnameescape(temp_file)],
+  \ 'exe': &shell,
+  \ 'append_file': 0,
+  \ 'remove_invalid_entries': 0}
+
+  AssertNotEqual temp_file, fnameescape(temp_file)
+
+  bwipe
