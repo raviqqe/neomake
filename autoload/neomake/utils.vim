@@ -427,7 +427,7 @@ function! neomake#utils#get_fname_for_buffer(jobinfo) abort
     let bufnr = a:jobinfo.bufnr
     let bufname = bufname(bufnr)
     if !len(bufname)
-        let ft = a:jobinfo.ft
+        let ft = a:jobinfo.maker.ft
         let temp_file = s:get_tempname('neomake_tmp_' . ft)
         call neomake#utils#DebugMessage(printf(
                     \ 'Using tempfile for unnamed buffer %s: %s', bufnr, temp_file))

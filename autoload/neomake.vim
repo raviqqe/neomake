@@ -189,7 +189,7 @@ function! s:MakeJob(make_id, options) abort
 
     try
         let error = ''
-        let argv = maker._get_argv(jobinfo.file_mode ? jobinfo.bufnr : 0)
+        let argv = maker._get_argv(jobinfo)
         if neomake#has_async_support()
             if has('nvim')
                 let opts = {
@@ -696,7 +696,7 @@ function! s:AddExprCallback(jobinfo, prev_index) abort
         let index += 1
 
         let before = copy(entry)
-        if has_key(maker, 'temp_file') && file_mode
+        if has_key(a:jobinfo, 'temp_file') && file_mode
             let entry.bufnr = a:jobinfo.bufnr
         endif
         for s:f in s:postprocessors
@@ -808,14 +808,15 @@ function! s:CleanJobinfo(jobinfo) abort
         endif
     endif
 
-    if has_key(a:jobinfo.maker, 'temp_file')
+    if has_key(a:jobinfo, 'temp_file')
+        let temp_file = a:jobinfo.temp_file
         call neomake#utils#DebugMessage(printf('Removing temporary file: %s',
-                    \ a:jobinfo.maker.temp_file))
-        call delete(a:jobinfo.maker.temp_file)
+                    \ temp_file))
+        call delete(temp_file)
         " XXX: old Vim has no support for flags.. the patch version is not
         " exact here!
         if v:version >= 705 || (v:version == 704 && has('patch1689'))
-            call delete(fnamemodify(a:jobinfo.maker.temp_file, ':h'), 'd')
+            call delete(fnamemodify(temp_file, ':h'), 'd')
         endif
     endif
 
